@@ -93,6 +93,7 @@ function Sheet({ init, onSave, onDelete, onClose }) {
     if (!Number.isFinite(a) || a <= 0) return setErr('AMOUNT MUST BE MORE THAN 0');
     if (a > 1e9) return setErr('AMOUNT TOO LARGE');
     if (date.length !== 10 || Number.isNaN(new Date(date).getTime())) return setErr('PICK A VALID DATE');
+    if (date > todayStr()) return setErr('FUTURE DATE NOT ALLOWED');
     onSave({ name: name.trim(), amount: a, category, date });
   };
 
@@ -116,7 +117,7 @@ function Sheet({ init, onSave, onDelete, onClose }) {
           ))}
         </div>
         <label>DATE</label>
-        <input type='date' value={date} onChange={(e) => setDate(e.target.value)} />
+        <input type='date' value={date} max={todayStr()} onChange={(e) => setDate(e.target.value)} />
         {err && <div className='err'>{err}</div>}
         <div className='actions'>
           {onDelete && <button className='btn ghost' onClick={onDelete}><Trash2 size={16} /> DELETE</button>}
