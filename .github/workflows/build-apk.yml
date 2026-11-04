@@ -26,7 +26,7 @@ jobs:
       - run: npm install
       - run: npm run build
       - run: npx cap add android
-      - run: pip install pillow && python scripts/brand.py
+      - run: pip install pillow && python brand.py
       - run: npx cap sync android
       - name: Bump versionCode
         run: sed -i "s/versionCode 1/versionCode ${{ github.run_number }}/" android/app/build.gradle
