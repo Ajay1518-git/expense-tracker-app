@@ -1,11 +1,14 @@
 import { useEffect, useMemo, useState } from 'react';
 import {
   Home, List, Plus, X, Trash2, ChevronLeft, ChevronRight, Search, Undo2,
-  Wallet, BarChart3, Utensils, Bus, ShoppingBag, Receipt, Shapes,
+  Wallet, BarChart3, Utensils, Bus, ShoppingBag, Receipt, Shapes, Sun, Moon,
 } from 'lucide-react';
+import { Capacitor } from '@capacitor/core';
+import { StatusBar, Style } from '@capacitor/status-bar';
 
 const EKEY = 'et.expenses.v1';
 const BKEY = 'et.budget.v1';
+const TKEY = 'et.theme.v1';
 const CATS = [
   { name: 'Food', Icon: Utensils },
   { name: 'Travel', Icon: Bus },
@@ -67,6 +70,14 @@ function loadExpenses() {
       category: CATS.some((c) => c.name === e.category) ? e.category : 'Other',
       date: e.date,
     }));
+}
+
+function initialTheme() {
+  try {
+    const t = localStorage.getItem(TKEY);
+    if (t === 'dark' || t === 'light') return t;
+  } catch { /* ignore */ }
+  return window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
 }
 
 function Row({ e, onClick }) {
@@ -142,6 +153,20 @@ export default function App() {
   const [toast, setToast] = useState(null);
   const [editBudget, setEditBudget] = useState(false);
   const [draft, setDraft] = useState('');
+  const [theme, setTheme] = useState(initialTheme);
+
+  useEffect(() => {
+    document.documentElement.setAttribute('data-theme', theme);
+    if (Capacitor.isNativePlatform()) {
+      StatusBar.setBackgroundColor({ color: theme === 'dark' ? '#0E1527' : '#F8F4EA' }).catch(() => {});
+      StatusBar.setStyle({ style: theme === 'dark' ? Style.Dark : Style.Light }).catch(() => {});
+    }
+  }, [theme]);
+  const toggleTheme = () => {
+    const next = theme === 'dark' ? 'light' : 'dark';
+    setTheme(next);
+    try { localStorage.setItem(TKEY, next); } catch { /* ignore */ }
+  };
 
   useEffect(() => {
     try { localStorage.setItem(EKEY, JSON.stringify(expenses)); } catch { /* ignore */ }
@@ -311,6 +336,10 @@ export default function App() {
         {[['home', Home, 'HOME'], ['history', List, 'LOG'], ['stats', BarChart3, 'STATS']].map(([k, Icon, l]) => (
           <button key={k} className={tab === k ? 'on' : ''} onClick={() => setTab(k)}><Icon size={20} /><span>{l}</span></button>
         ))}
+        <button onClick={toggleTheme}>
+          {theme === 'dark' ? <Sun size={20} /> : <Moon size={20} />}
+          <span>{theme === 'dark' ? 'LIGHT' : 'DARK'}</span>
+        </button>
         <button className='add' onClick={() => setSheet({})}><Plus size={20} /><span>ADD</span></button>
       </nav>
 
