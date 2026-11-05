@@ -355,9 +355,10 @@ function Tracker({ user, theme, toggleTheme }) {
       </header>
 
       <main>
+        <div className='page'>
         {tab === 'home' && (
-          <>
-            <section className='box shadow'>
+          <div className='bento'>
+            <section className='box shadow budget'>
               <div className='lab'>
                 <Wallet size={14} /> MONTHLY BUDGET
                 <button className='link' onClick={() => { setDraft(String(budget)); setEditBudget(!editBudget); }}>EDIT</button>
@@ -376,15 +377,19 @@ function Tracker({ user, theme, toggleTheme }) {
               <div className='box'><div className='lab'>ENTRIES</div><div className='mid'>{monthExp.length}</div></div>
               <div className='box'><div className='lab'>TOP CATEGORY</div><div className='mid'>{byCat.length ? byCat[0][0].toUpperCase() : '—'}</div></div>
             </div>
-            <div className='h'>RECENT</div>
-            {recent.length
-              ? recent.map((e) => <Row key={e.id} e={e} onClick={open(e)} />)
-              : <div className='empty'>NO EXPENSES THIS MONTH<br />TAP ADD TO START</div>}
-          </>
+            <div className='recent'>
+              <div className='h'>RECENT</div>
+              <div className='rows'>
+                {recent.length
+                  ? recent.map((e) => <Row key={e.id} e={e} onClick={open(e)} />)
+                  : <div className='empty'>NO EXPENSES THIS MONTH<br />TAP ADD TO START</div>}
+              </div>
+            </div>
+          </div>
         )}
 
         {tab === 'history' && (
-          <>
+          <div className='log'>
             <div className='search'>
               <Search size={16} />
               <input placeholder='Search all expenses' value={query} onChange={(e) => setQuery(e.target.value)} />
@@ -398,20 +403,24 @@ function Tracker({ user, theme, toggleTheme }) {
             {groups.length ? groups.map((g) => (
               <div key={g.date}>
                 <div className='h'>{dayLabel(g.date)}</div>
-                {g.items.map((e) => <Row key={e.id} e={e} onClick={open(e)} />)}
+                <div className='rows'>
+                  {g.items.map((e) => <Row key={e.id} e={e} onClick={open(e)} />)}
+                </div>
               </div>
             )) : <div className='empty'>NOTHING FOUND</div>}
-          </>
+          </div>
         )}
 
         {tab === 'stats' && (
-          <>
+          <div className='bento stats'>
             <section className='box shadow'>
               <div className='lab'>MONTH TOTAL</div>
               <div className='big'>{fmt(spent)}</div>
               <div className='sub'>{monthExp.length} ENTRIES · AVG {fmt(spent / days)} / DAY</div>
             </section>
-            <div className='h'>BY CATEGORY</div>
+            <div className='recent'>
+              <div className='h'>BY CATEGORY</div>
+              <div className='rows'>
             {byCat.length ? byCat.map(([n, t]) => {
               const Icon = iconFor(n);
               const share = spent ? (t / spent) * 100 : 0;
@@ -423,8 +432,10 @@ function Tracker({ user, theme, toggleTheme }) {
                 </div>
               );
             }) : <div className='empty'>NO DATA</div>}
-            <div className='box'><div className='lab'>ALL-TIME TOTAL</div><div className='mid'>{fmt(allTotal)}</div></div>
-          </>
+              </div>
+            </div>
+            <div className='box alltime'><div className='lab'>ALL-TIME TOTAL</div><div className='mid'>{fmt(allTotal)}</div></div>
+          </div>
         )}
         {tab === 'account' && (
           <Account
@@ -437,6 +448,7 @@ function Tracker({ user, theme, toggleTheme }) {
             onLogout={logout}
           />
         )}
+        </div>
       </main>
 
       <nav>
