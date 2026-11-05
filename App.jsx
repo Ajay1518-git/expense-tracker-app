@@ -1,10 +1,16 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   Home, List, Plus, X, Trash2, ChevronLeft, ChevronRight, Search, Undo2,
-  Wallet, BarChart3, Utensils, Bus, ShoppingBag, Receipt, Shapes, Sun, Moon,
+  Wallet, BarChart3, Utensils, Bus, ShoppingBag, Receipt, Shapes, User,
 } from 'lucide-react';
 import { Capacitor } from '@capacitor/core';
 import { StatusBar, Style } from '@capacitor/status-bar';
+import { supabase, configured } from './supabase.js';
+import AuthScreen from './AuthScreen.jsx';
+import Account from './Account.jsx';
+import {
+  emptyDoc, mergeDocs, docEqual, loadCache, saveCache, clearCache, syncOnce, peekVersion,
+} from './sync.js';
 
 const EKEY = 'et.expenses.v1';
 const BKEY = 'et.budget.v1';
@@ -80,6 +86,17 @@ function initialTheme() {
   return window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
 }
 
+// Data saved by the older, offline-only version of the app on this phone.
+function findLegacy() {
+  try {
+    if (localStorage.getItem('et.legacy.done')) return null;
+  } catch { return null; }
+  const items = loadExpenses();
+  if (!items.length) return null;
+  const b = Number(read(BKEY, 0));
+  return { items, budget: Number.isFinite(b) && b > 0 ? b : 0 };
+}
+
 function Row({ e, onClick }) {
   const Icon = iconFor(e.category);
   return (
@@ -139,41 +156,114 @@ function Sheet({ init, onSave, onDelete, onClose }) {
   );
 }
 
-export default function App() {
+function Tracker({ user, theme, toggleTheme }) {
   const [tab, setTab] = useState('home');
   const [month, setMonth] = useState(ym(todayStr()));
-  const [expenses, setExpenses] = useState(loadExpenses);
-  const [budget, setBudget] = useState(() => {
-    const b = Number(read(BKEY, 10000));
-    return Number.isFinite(b) && b > 0 ? b : 10000;
-  });
+  const [initial] = useState(() => loadCache(user.id));
+  const [expenses, setExpenses] = useState(initial.expenses);
+  const [tombs, setTombs] = useState(initial.tombs);
+  const [budget, setBudget] = useState(initial.budget ? initial.budget.v : 10000);
+  const [budgetU, setBudgetU] = useState(initial.budget ? initial.budget.u : 0);
   const [sheet, setSheet] = useState(null);
   const [query, setQuery] = useState('');
   const [fcat, setFcat] = useState('All');
   const [toast, setToast] = useState(null);
   const [editBudget, setEditBudget] = useState(false);
   const [draft, setDraft] = useState('');
-  const [theme, setTheme] = useState(initialTheme);
+  const [syncState, setSyncState] = useState('syncing');
+  const [legacy, setLegacy] = useState(findLegacy);
 
-  useEffect(() => {
-    document.documentElement.setAttribute('data-theme', theme);
-    if (Capacitor.isNativePlatform()) {
-      StatusBar.setBackgroundColor({ color: theme === 'dark' ? '#0E1527' : '#F8F4EA' }).catch(() => {});
-      StatusBar.setStyle({ style: theme === 'dark' ? Style.Dark : Style.Light }).catch(() => {});
-    }
-  }, [theme]);
-  const toggleTheme = () => {
-    const next = theme === 'dark' ? 'light' : 'dark';
-    setTheme(next);
-    try { localStorage.setItem(TKEY, next); } catch { /* ignore */ }
+  const docRef = useRef(emptyDoc());
+  docRef.current = { expenses, tombs, budget: budgetU ? { v: budget, u: budgetU } : null };
+  const verRef = useRef(null);
+  const busy = useRef(false);
+  const again = useRef(false);
+  const loggingOut = useRef(false);
+
+  const applyDoc = (d) => {
+    if (docEqual(docRef.current, d)) return;
+    setExpenses(d.expenses);
+    setTombs(d.tombs);
+    if (d.budget) { setBudget(d.budget.v); setBudgetU(d.budget.u); }
   };
 
+  const runSync = async () => {
+    if (loggingOut.current) return;
+    if (busy.current) { again.current = true; return; }
+    busy.current = true;
+    setSyncState('syncing');
+    try {
+      const res = await syncOnce(supabase, user.id, docRef.current);
+      verRef.current = res.version;
+      applyDoc(mergeDocs(docRef.current, res.doc));
+      setSyncState('synced');
+    } catch {
+      setSyncState(navigator.onLine ? 'error' : 'offline');
+    } finally {
+      busy.current = false;
+      if (again.current) { again.current = false; setTimeout(runSync, 300); }
+    }
+  };
+
+  // Every change is cached on the phone and sent to the cloud a moment later.
   useEffect(() => {
-    try { localStorage.setItem(EKEY, JSON.stringify(expenses)); } catch { /* ignore */ }
-  }, [expenses]);
+    if (loggingOut.current) return undefined;
+    saveCache(user.id, docRef.current);
+    const t = setTimeout(runSync, 1200);
+    return () => clearTimeout(t);
+  }, [expenses, tombs, budget, budgetU]);
+
+  // Pick up changes made on other devices.
   useEffect(() => {
-    try { localStorage.setItem(BKEY, JSON.stringify(budget)); } catch { /* ignore */ }
-  }, [budget]);
+    const onVis = () => { if (document.visibilityState === 'visible') runSync(); };
+    const onOnline = () => runSync();
+    const poll = async () => {
+      if (document.visibilityState !== 'visible' || !navigator.onLine || busy.current) return;
+      try {
+        const v = await peekVersion(supabase, user.id);
+        if (verRef.current !== null && v !== verRef.current) runSync();
+      } catch { /* try again next time */ }
+    };
+    document.addEventListener('visibilitychange', onVis);
+    window.addEventListener('online', onOnline);
+    const id = setInterval(poll, 30000);
+    return () => {
+      document.removeEventListener('visibilitychange', onVis);
+      window.removeEventListener('online', onOnline);
+      clearInterval(id);
+    };
+  }, []);
+
+  const finishLegacy = (doImport) => {
+    if (doImport && legacy) {
+      const items = legacy.items.map((e) => ({ ...e, u: 1 }));
+      const merged = mergeDocs(docRef.current, {
+        expenses: items,
+        tombs: {},
+        budget: legacy.budget && !budgetU ? { v: legacy.budget, u: 1 } : null,
+      });
+      setExpenses(merged.expenses);
+      setTombs(merged.tombs);
+      if (merged.budget) { setBudget(merged.budget.v); setBudgetU(merged.budget.u); }
+    }
+    try { localStorage.setItem('et.legacy.done', '1'); } catch { /* ignore */ }
+    setLegacy(null);
+  };
+
+  const logout = async () => {
+    setSyncState('syncing');
+    try {
+      const res = await syncOnce(supabase, user.id, docRef.current);
+      applyDoc(mergeDocs(docRef.current, res.doc));
+    } catch {
+      setSyncState(navigator.onLine ? 'error' : 'offline');
+      if (!window.confirm('Sync failed. Logging out now will lose changes that are not saved to the cloud yet. Log out anyway?')) return;
+    }
+    loggingOut.current = true;
+    clearCache(user.id);
+    await supabase.auth.signOut();
+  };
+
   useEffect(() => {
     if (!toast) return undefined;
     const t = setTimeout(() => setToast(null), 5000);
@@ -215,7 +305,7 @@ export default function App() {
   const save = (data) => {
     if (sheet && sheet.expense) {
       const id = sheet.expense.id;
-      setExpenses((p) => p.map((e) => (e.id === id ? { ...e, ...data } : e)));
+      setExpenses((p) => p.map((e) => (e.id === id ? { ...e, ...data, u: Date.now() } : e)));
       setToast({ msg: 'UPDATED' });
     } else {
       const m = ym(data.date);
@@ -224,7 +314,7 @@ export default function App() {
       let msg = 'ADDED';
       if (total > budget) msg = `ADDED · OVER BUDGET BY ${fmt(total - budget)}`;
       else if (p >= 80) msg = `ADDED · ${Math.round(p)}% OF BUDGET USED`;
-      setExpenses((prev) => [{ id: uid(), ...data }, ...prev]);
+      setExpenses((prev) => [{ id: uid(), ...data, u: Date.now() }, ...prev]);
       setToast({ msg });
     }
     setMonth(ym(data.date));
@@ -232,16 +322,22 @@ export default function App() {
   };
   const remove = (exp) => {
     setExpenses((p) => p.filter((e) => e.id !== exp.id));
+    setTombs((t) => ({ ...t, [exp.id]: Date.now() }));
     setSheet(null);
     setToast({
       msg: 'DELETED',
-      undo: () => { setExpenses((p) => [exp, ...p]); setToast(null); },
+      undo: () => {
+        setExpenses((p) => [{ ...exp, u: Date.now() }, ...p]);
+        setTombs((t) => { const n = { ...t }; delete n[exp.id]; return n; });
+        setToast(null);
+      },
     });
   };
   const saveBudget = () => {
     const b = Number(draft.replace(',', '.'));
     if (Number.isFinite(b) && b > 0 && b <= 1e9) {
       setBudget(Math.round(b * 100) / 100);
+      setBudgetU(Date.now());
       setEditBudget(false);
     }
   };
@@ -330,16 +426,23 @@ export default function App() {
             <div className='box'><div className='lab'>ALL-TIME TOTAL</div><div className='mid'>{fmt(allTotal)}</div></div>
           </>
         )}
+        {tab === 'account' && (
+          <Account
+            user={user}
+            theme={theme}
+            toggleTheme={toggleTheme}
+            syncState={syncState}
+            count={expenses.length}
+            onSync={runSync}
+            onLogout={logout}
+          />
+        )}
       </main>
 
       <nav>
-        {[['home', Home, 'HOME'], ['history', List, 'LOG'], ['stats', BarChart3, 'STATS']].map(([k, Icon, l]) => (
+        {[['home', Home, 'HOME'], ['history', List, 'LOG'], ['stats', BarChart3, 'STATS'], ['account', User, 'ACCOUNT']].map(([k, Icon, l]) => (
           <button key={k} className={tab === k ? 'on' : ''} onClick={() => setTab(k)}><Icon size={20} /><span>{l}</span></button>
         ))}
-        <button onClick={toggleTheme}>
-          {theme === 'dark' ? <Sun size={20} /> : <Moon size={20} />}
-          <span>{theme === 'dark' ? 'LIGHT' : 'DARK'}</span>
-        </button>
         <button className='add' onClick={() => setSheet({})}><Plus size={20} /><span>ADD</span></button>
       </nav>
 
@@ -347,6 +450,21 @@ export default function App() {
         <div className='toast'>
           <span>{toast.msg}</span>
           {toast.undo && <button onClick={toast.undo}><Undo2 size={14} /> UNDO</button>}
+        </div>
+      )}
+      {legacy && (
+        <div className='overlay'>
+          <div className='sheet'>
+            <div className='sheet-h'><b>OLD DATA FOUND</b></div>
+            <p className='note'>
+              {legacy.items.length} expenses from the older version of the app were found on this phone.
+              Add them to your account?
+            </p>
+            <div className='actions'>
+              <button className='btn ghost' onClick={() => finishLegacy(false)}>NO</button>
+              <button className='btn' onClick={() => finishLegacy(true)}>YES, ADD</button>
+            </div>
+          </div>
         </div>
       )}
       {sheet && (
@@ -360,4 +478,40 @@ export default function App() {
       )}
     </div>
   );
+}
+
+function Splash({ text }) {
+  return <div className='auth'><div className='auth-sub'>{text}</div></div>;
+}
+
+export default function App() {
+  const [theme, setTheme] = useState(initialTheme);
+  const [session, setSession] = useState(undefined);
+
+  useEffect(() => {
+    document.documentElement.setAttribute('data-theme', theme);
+    if (Capacitor.isNativePlatform()) {
+      StatusBar.setBackgroundColor({ color: theme === 'dark' ? '#0E1527' : '#F8F4EA' }).catch(() => {});
+      StatusBar.setStyle({ style: theme === 'dark' ? Style.Dark : Style.Light }).catch(() => {});
+    }
+  }, [theme]);
+  const toggleTheme = () => {
+    const next = theme === 'dark' ? 'light' : 'dark';
+    setTheme(next);
+    try { localStorage.setItem(TKEY, next); } catch { /* ignore */ }
+  };
+
+  useEffect(() => {
+    if (!supabase) return undefined;
+    supabase.auth.getSession()
+      .then(({ data }) => setSession(data.session || null))
+      .catch(() => setSession(null));
+    const { data: sub } = supabase.auth.onAuthStateChange((_event, next) => setSession(next || null));
+    return () => sub.subscription.unsubscribe();
+  }, []);
+
+  if (!configured) return <Splash text='APP NOT CONFIGURED · SUPABASE KEYS MISSING' />;
+  if (session === undefined) return <Splash text='LOADING…' />;
+  if (!session) return <AuthScreen />;
+  return <Tracker key={session.user.id} user={session.user} theme={theme} toggleTheme={toggleTheme} />;
 }
