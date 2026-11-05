@@ -10,7 +10,7 @@ const LABELS = {
 export default function Account({ user, theme, toggleTheme, syncState, count, onSync, onLogout }) {
   const name = (user.user_metadata && user.user_metadata.name) || 'User';
   return (
-    <>
+    <div className='bento acct'>
       <section className='box shadow'>
         <div className='lab'>ACCOUNT</div>
         <div className='mid'>{name}</div>
@@ -34,6 +34,6 @@ export default function Account({ user, theme, toggleTheme, syncState, count, on
         </div>
       </section>
       <button className='btn ghost wide' onClick={onLogout}><LogOut size={16} /> LOG OUT</button>
-    </>
+    </div>
   );
 }
